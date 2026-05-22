@@ -172,6 +172,10 @@
       // All children are cells (not rows), detect by width style
       detected = tryConvertFlatGrid(section, childSections);
       if (detected) continue;
+
+      // --- Pattern 3: Pure structural flat cells (no CSS hints) ---
+      detected = tryConvertFlatTextCells(section, childSections);
+      if (detected) continue;
     }
   }
 
@@ -319,6 +323,81 @@
           }
         }
       }
+    }
+
+    return false;
+  }
+
+  function tryConvertFlatTextCells(section, children) {
+    // Pure structural detection: N child sections, each with only short text,
+    // no sub-sections. Try to find a column count that makes a reasonable table.
+    if (children.length < 6) return false;
+
+    // Verify all children are leaf nodes with short text
+    for (const child of children) {
+      const subSections = child.querySelectorAll("section, p");
+      if (subSections.length > 0) return false; // has nested elements, not a leaf cell
+      const text = child.textContent.trim();
+      if (text.length > 200) return false; // too long for a table cell
+      if (text.length === 0) return false; // empty cell
+    }
+
+    // Try column counts from 2 to 6, pick the best one
+    for (let colCount = 2; colCount <= 6; colCount++) {
+      if (children.length % colCount !== 0) continue;
+      const rowCount = children.length / colCount;
+      if (rowCount < 2) continue;
+
+      // Heuristic: first row (header) should have short text
+      let headerShort = true;
+      for (let c = 0; c < colCount; c++) {
+        if (children[c].textContent.trim().length > 30) {
+          headerShort = false;
+          break;
+        }
+      }
+      if (!headerShort) continue;
+
+      // Heuristic: prefer the smallest column count that gives >= 2 rows
+      // and where header text is notably shorter than data text on average
+      const headerAvgLen =
+        Array.from({ length: colCount }, (_, i) => children[i].textContent.trim().length)
+          .reduce((a, b) => a + b, 0) / colCount;
+
+      // Check if subsequent rows have similar structure
+      let rowsConsistent = true;
+      for (let r = 1; r < rowCount; r++) {
+        const rowAvgLen =
+          Array.from({ length: colCount }, (_, i) => children[r * colCount + i].textContent.trim().length)
+            .reduce((a, b) => a + b, 0) / colCount;
+        // If any row has a very different average length, might not be a table
+        if (rowAvgLen > headerAvgLen * 5) {
+          rowsConsistent = false;
+          break;
+        }
+      }
+
+      if (!rowsConsistent) continue;
+
+      // Found a valid table structure!
+      const table = document.createElement("table");
+      const tbody = document.createElement("tbody");
+
+      for (let r = 0; r < rowCount; r++) {
+        const tr = document.createElement("tr");
+        for (let c = 0; c < colCount; c++) {
+          const idx = r * colCount + c;
+          const tag = r === 0 ? "th" : "td";
+          const cell = document.createElement(tag);
+          cell.innerHTML = children[idx].innerHTML.trim();
+          tr.appendChild(cell);
+        }
+        tbody.appendChild(tr);
+      }
+
+      table.appendChild(tbody);
+      section.replaceWith(table);
+      return true;
     }
 
     return false;
