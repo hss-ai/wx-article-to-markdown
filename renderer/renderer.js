@@ -14,22 +14,45 @@ const logBox = document.getElementById("logBox");
 const actionsDiv = document.getElementById("actions");
 const optDownload = document.getElementById("optDownload");
 
-// Listen for progress events
+// ---- Theme toggle ----
+
+const themeToggle = document.getElementById("themeToggle");
+
+function getPreferredTheme() {
+  const stored = localStorage.getItem("theme");
+  if (stored) return stored;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("theme", theme);
+}
+
+applyTheme(getPreferredTheme());
+
+themeToggle.addEventListener("click", () => {
+  const current = document.documentElement.getAttribute("data-theme");
+  applyTheme(current === "dark" ? "light" : "dark");
+});
+
+// ---- Progress events ----
+
 window.api.onProgress((data) => {
   const pct = Math.round((data.current / data.total) * 100);
   progressFill.style.width = pct + "%";
   statusText.textContent = `[${data.current}/${data.total}] ${data.file}`;
 
   if (data.status === "done") {
-    appendLog(`[OK] ${data.file} => ${data.result.outputPath} (${data.result.images} images)`, "ok");
+    appendLog(`[OK] ${data.file} => ${data.result.outputPath} (${data.result.images} images)`, "log-ok");
   } else if (data.status === "error") {
-    appendLog(`[FAIL] ${data.file}: ${data.result.error}`, "fail");
+    appendLog(`[FAIL] ${data.file}: ${data.result.error}`, "log-fail");
   }
 });
 
 function appendLog(text, cls) {
   const span = document.createElement("span");
-  span.className = cls || "info";
+  span.className = cls || "log-info";
   span.textContent = text + "\n";
   logBox.appendChild(span);
   logBox.scrollTop = logBox.scrollHeight;
@@ -75,18 +98,19 @@ async function startConvert() {
     return;
   }
 
+  // UI: loading state
   convertBtn.disabled = true;
   convertBtn.textContent = "Converting...";
-  progressSection.style.display = "block";
-  logSection.style.display = "block";
-  actionsDiv.style.display = "none";
+  progressSection.classList.add("visible");
+  logSection.classList.remove("hidden");
+  actionsDiv.classList.add("hidden");
   logBox.innerHTML = "";
   progressFill.style.width = "0%";
 
   const outputDir = outputEl.value.trim() || null;
   const download = optDownload.checked;
 
-  appendLog(`Converting ${selectedFiles.length} file(s)...`, "info");
+  appendLog(`Converting ${selectedFiles.length} file(s)...`, "log-info");
 
   try {
     const results = await window.api.convert({
@@ -99,16 +123,15 @@ async function startConvert() {
     const fail = results.filter((r) => r.error);
 
     appendLog("");
-    appendLog(`Done: ${ok.length} success, ${fail.length} failed`, "info");
+    appendLog(`Done: ${ok.length} success, ${fail.length} failed`, "log-info");
 
     if (ok.length > 0) {
-      // Extract directory from output path
       const fullPath = ok[0].outputPath.replace(/\\/g, "/");
       lastOutputDir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-      actionsDiv.style.display = "block";
+      actionsDiv.classList.remove("hidden");
     }
   } catch (err) {
-    appendLog(`[ERROR] ${err.message || err}`, "fail");
+    appendLog(`[ERROR] ${err.message || err}`, "log-fail");
   }
 
   convertBtn.disabled = false;

@@ -4,6 +4,8 @@
 
 将 SingleFile 保存的网页（微信公众号、知乎、掘金、少数派等）一键转换为 Markdown，自动提取图片到 `assets/` 目录。
 
+![HTML2MD Screenshot](screenshot.png)
+
 ## Features
 
 - **Electron 跨平台桌面应用** — Windows / macOS / Linux
