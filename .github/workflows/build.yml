@@ -49,11 +49,16 @@ jobs:
         if: matrix.platform == 'linux'
         run: npm run build:linux
 
-      - name: Upload artifacts
+      - name: Upload installers only
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: release/**/*
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.blockmap
+            release/*.yml
           if-no-files-found: error
 
   release:
@@ -70,7 +75,7 @@ jobs:
           path: artifacts
 
       - name: List artifacts
-        run: find artifacts -type f | head -30
+        run: find artifacts -type f | sort
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -78,6 +83,10 @@ jobs:
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            artifacts/**/*
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.blockmap
+            artifacts/**/*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
