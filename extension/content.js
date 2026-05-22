@@ -147,94 +147,181 @@
 
   // ---------------------------------------------------------------------------
   // WeChat section-based table detection & conversion
+  // Works on the ORIGINAL DOM to access computed styles.
   // ---------------------------------------------------------------------------
 
-  function convertSectionTables(root) {
-    // WeChat uses <section> with flex/grid CSS instead of <table>.
-    // Detect grid patterns: parent section with multiple child sections
-    // where each child has a consistent number of sub-children (columns).
-    const allSections = root.querySelectorAll("section");
+  function convertSectionTables(originalRoot) {
+    // Strategy: walk all <section> elements, detect table patterns using
+    // computed styles AND structural heuristics.
 
-    for (const section of allSections) {
-      const style = (section.getAttribute("style") || "").replace(/\s/g, "");
-      // Detect table-like containers: display:flex or display:grid with enough children
-      const isFlexOrGrid =
-        style.includes("display:flex") || style.includes("display:grid");
-      if (!isFlexOrGrid) continue;
+    const candidates = originalRoot.querySelectorAll("section");
 
-      const children = Array.from(section.children).filter(
+    for (const section of candidates) {
+      // Skip if already small or has no children
+      const childSections = Array.from(section.children).filter(
         (c) => c.tagName === "SECTION" || c.tagName === "P"
       );
-      if (children.length < 2) continue;
+      if (childSections.length < 4) continue;
 
-      // Check if children form a consistent grid (rows with equal column count)
-      let colCount = 0;
-      let isGrid = true;
+      // --- Pattern 1: Row-based grid ---
+      // Children are rows, each containing same number of cell children
+      let detected = tryConvertRowBasedGrid(section, childSections);
+      if (detected) continue;
 
-      for (let i = 0; i < children.length; i++) {
-        const subChildren = Array.from(children[i].children).filter(
-          (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
-        );
-
-        if (subChildren.length === 0) {
-          // This child has text directly — it's a single-column row
-          // or this section is a cell, not a row
-          isGrid = false;
-          break;
-        }
-
-        if (i === 0) {
-          colCount = subChildren.length;
-        } else if (subChildren.length !== colCount) {
-          isGrid = false;
-          break;
-        }
-      }
-
-      if (!isGrid || colCount < 2 || children.length < 2) continue;
-
-      // Build a <table> element
-      const table = document.createElement("table");
-      const tbody = document.createElement("tbody");
-
-      for (let r = 0; r < children.length; r++) {
-        const tr = document.createElement("tr");
-        const cells = Array.from(children[r].children).filter(
-          (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
-        );
-
-        for (let c = 0; c < cells.length; c++) {
-          const tag = r === 0 ? "th" : "td";
-          const cell = document.createElement(tag);
-          cell.innerHTML = cells[c].innerHTML.trim();
-          tr.appendChild(cell);
-        }
-        tbody.appendChild(tr);
-      }
-
-      table.appendChild(tbody);
-      section.replaceWith(table);
+      // --- Pattern 2: Flat cells with consistent width ---
+      // All children are cells (not rows), detect by width style
+      detected = tryConvertFlatGrid(section, childSections);
+      if (detected) continue;
     }
+  }
 
-    // Also handle simpler section patterns: alternating label/value pairs
-    // These are common in WeChat info boxes
-    const infoSections = root.querySelectorAll("section");
-    for (const section of infoSections) {
-      const style = (section.getAttribute("style") || "").replace(/\s/g, "");
-      if (!style.includes("display:flex")) continue;
+  function tryConvertRowBasedGrid(section, children) {
+    // Check if children are rows, each with same number of sub-children
+    let colCount = 0;
+    let isGrid = true;
 
-      const directChildren = Array.from(section.children).filter(
-        (c) => c.tagName === "SECTION"
+    for (let i = 0; i < children.length; i++) {
+      const subChildren = Array.from(children[i].children).filter(
+        (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
       );
-      if (directChildren.length !== 2) continue;
+      if (subChildren.length === 0) { isGrid = false; break; }
+      if (i === 0) colCount = subChildren.length;
+      else if (subChildren.length !== colCount) { isGrid = false; break; }
+    }
 
-      // Check if this looks like label: value pattern
-      const text1 = directChildren[0].textContent.trim();
-      const text2 = directChildren[1].textContent.trim();
-      if (text1 && text2 && text1.length < 30 && text2.length < 100) {
-        // Skip — these are usually just layout sections, not tables
+    if (!isGrid || colCount < 2 || children.length < 2) return false;
+
+    // Verify with computed style: parent or children should be flex/grid
+    const parentStyle = getComputedStyle(section);
+    const childStyle = getComputedStyle(children[0]);
+    const isTableLayout =
+      parentStyle.display === "flex" ||
+      parentStyle.display === "grid" ||
+      childStyle.display === "flex" ||
+      childStyle.display === "grid" ||
+      // Also check inline style as fallback
+      (section.getAttribute("style") || "").includes("display");
+
+    // If not flex/grid but structural pattern matches, still convert
+    // (some WeChat tables use borders/floats instead)
+
+    // Additional check: all cells should have short-ish text (table cells, not paragraphs)
+    let allShort = true;
+    for (const child of children) {
+      const text = child.textContent.trim();
+      if (text.length > 200) { allShort = false; break; }
+    }
+    if (!allShort) return false;
+
+    // Convert
+    const table = document.createElement("table");
+    const tbody = document.createElement("tbody");
+
+    for (let r = 0; r < children.length; r++) {
+      const tr = document.createElement("tr");
+      const cells = Array.from(children[r].children).filter(
+        (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
+      );
+      for (let c = 0; c < cells.length; c++) {
+        const tag = r === 0 ? "th" : "td";
+        const cell = document.createElement(tag);
+        cell.innerHTML = cells[c].innerHTML.trim();
+        tr.appendChild(cell);
+      }
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    section.replaceWith(table);
+    return true;
+  }
+
+  function tryConvertFlatGrid(section, children) {
+    // All children are cells, not rows. Detect by:
+    // 1. Children have consistent width style (e.g., all width:25%)
+    // 2. Total children count is divisible by a reasonable column count
+
+    // Check for consistent width percentage in styles
+    const widths = [];
+    for (const child of children) {
+      const style = child.getAttribute("style") || "";
+      const widthMatch = style.match(/width\s*:\s*(\d+\.?\d*)\s*%/);
+      if (widthMatch) {
+        widths.push(parseFloat(widthMatch[1]));
       }
     }
+
+    if (widths.length === children.length && widths.length >= 4) {
+      // All children have width percentages
+      // Check if they're all the same (or very close)
+      const avgWidth = widths.reduce((a, b) => a + b, 0) / widths.length;
+      const allSameWidth = widths.every((w) => Math.abs(w - avgWidth) < 2);
+
+      if (allSameWidth && avgWidth >= 10 && avgWidth <= 50) {
+        // This looks like a flat grid table
+        const colCount = Math.round(100 / avgWidth);
+        const rowCount = children.length / colCount;
+
+        if (rowCount >= 2 && rowCount === Math.floor(rowCount)) {
+          // Convert
+          const table = document.createElement("table");
+          const tbody = document.createElement("tbody");
+
+          for (let r = 0; r < rowCount; r++) {
+            const tr = document.createElement("tr");
+            for (let c = 0; c < colCount; c++) {
+              const idx = r * colCount + c;
+              const tag = r === 0 ? "th" : "td";
+              const cell = document.createElement(tag);
+              cell.innerHTML = children[idx].innerHTML.trim();
+              tr.appendChild(cell);
+            }
+            tbody.appendChild(tr);
+          }
+
+          table.appendChild(tbody);
+          section.replaceWith(table);
+          return true;
+        }
+      }
+    }
+
+    // Fallback: check computed style for flex-wrap pattern
+    const computedStyle = getComputedStyle(section);
+    if (computedStyle.display === "flex" && computedStyle.flexWrap === "wrap") {
+      // Check if children have consistent flex-basis or width
+      const childComputed = getComputedStyle(children[0]);
+      const flexBasis = childComputed.flexBasis;
+      if (flexBasis && flexBasis !== "auto") {
+        // Parse percentage from flex-basis
+        const match = flexBasis.match(/(\d+\.?\d*)%/);
+        if (match) {
+          const pct = parseFloat(match[1]);
+          const colCount = Math.round(100 / pct);
+          const rowCount = children.length / colCount;
+          if (rowCount >= 2 && rowCount === Math.floor(rowCount) && colCount >= 2) {
+            const table = document.createElement("table");
+            const tbody = document.createElement("tbody");
+            for (let r = 0; r < rowCount; r++) {
+              const tr = document.createElement("tr");
+              for (let c = 0; c < colCount; c++) {
+                const idx = r * colCount + c;
+                const tag = r === 0 ? "th" : "td";
+                const cell = document.createElement(tag);
+                cell.innerHTML = children[idx].innerHTML.trim();
+                tr.appendChild(cell);
+              }
+              tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            section.replaceWith(table);
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
   }
 
   function blobToDataUrl(blob) {
@@ -269,6 +356,9 @@
     let contentEl = findBySelectors(CONTENT_SELECTORS);
     if (!contentEl) contentEl = document.body;
 
+    // 3.5 Convert section-based tables on ORIGINAL DOM (needs computed styles)
+    convertSectionTables(contentEl);
+
     // Get original images BEFORE cloning (they have real src after scroll)
     const originalImgs = contentEl.querySelectorAll("img");
 
@@ -278,10 +368,7 @@
     // Remove noise
     clone.querySelectorAll("style, script, noscript, iframe, svg").forEach((el) => el.remove());
 
-    // Convert section-based tables to <table> before further processing
-    convertSectionTables(clone);
-
-    // 4. Extract images from ORIGINAL elements, update clone references
+    // Extract images from ORIGINAL elements, update clone references
     const images = [];
     const cloneImgs = clone.querySelectorAll("img");
 
