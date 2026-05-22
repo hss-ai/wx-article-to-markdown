@@ -534,7 +534,43 @@
       cloneImgs[i].remove();
     }
 
-    // 5. Strip all attributes except essential
+    // 5. Pre-process code blocks: fix line breaks and remove "Code" labels
+    clone.querySelectorAll("pre code").forEach((code) => {
+      // Replace <br> with newline text nodes
+      code.querySelectorAll("br").forEach((br) => {
+        br.replaceWith("\n");
+      });
+      // Unwrap <p> inside code
+      code.querySelectorAll("p").forEach((p) => {
+        while (p.firstChild) {
+          p.parentNode.insertBefore(p.firstChild, p);
+        }
+        p.remove();
+      });
+    });
+    // Remove "Code" labels near <pre> elements
+    clone.querySelectorAll("pre").forEach((pre) => {
+      const prev = pre.previousElementSibling;
+      if (prev && prev.textContent.trim() === "Code") {
+        prev.remove();
+      }
+      // Also check parent's child elements
+      const parent = pre.parentElement;
+      if (parent) {
+        Array.from(parent.children).forEach((child) => {
+          if (
+            child !== pre &&
+            (child.tagName === "P" || child.tagName === "SPAN") &&
+            child.textContent.trim() === "Code" &&
+            child.querySelector("pre") === null
+          ) {
+            child.remove();
+          }
+        });
+      }
+    });
+
+    // 6. Strip all attributes except essential
     clone.querySelectorAll("*").forEach((el) => {
       const src = el.getAttribute("src");
       const href = el.getAttribute("href");

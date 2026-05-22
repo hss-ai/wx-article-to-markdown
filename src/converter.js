@@ -312,6 +312,36 @@ function convertFile(htmlPath, options = {}) {
     el.replaceWith(tableHtml);
   });
 
+  // Pre-process code blocks: fix line breaks and remove "Code" labels
+  contentEl.find("pre code").each(function () {
+    const code = $(this);
+    // Replace <br> with newline text nodes
+    code.find("br").each(function () {
+      $(this).replaceWith("\n");
+    });
+    // Unwrap <p> inside code (keep content, remove wrapper)
+    code.find("p").each(function () {
+      $(this).replaceWith($(this).html());
+    });
+  });
+  // Remove "Code" labels near <pre> elements
+  contentEl.find("pre").each(function () {
+    const pre = $(this);
+    const prev = pre.prev();
+    if (prev.length && prev.text().trim() === "Code") {
+      prev.remove();
+    }
+    // Also check if "Code" label is a sibling inside parent
+    const parent = pre.parent();
+    if (parent.length) {
+      parent.children("p, span").each(function () {
+        if ($(this).text().trim() === "Code" && $(this).find("pre").length === 0) {
+          $(this).remove();
+        }
+      });
+    }
+  });
+
   // Strip all attributes except essential ones
   contentEl.find("*").each(function () {
     const el = $(this);
