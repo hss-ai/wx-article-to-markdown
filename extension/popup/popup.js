@@ -400,19 +400,28 @@ async function captureFullPage(tabId) {
   // post-zoom. Their ratio is the only reliable scale factor — using
   // the pre-zoom devicePixelRatio here was the cause of right-side cropping.
   const firstImg = await loadImage(captures[0]);
+  if (!firstImg.width || !firstImg.height) {
+    throw new Error("Screenshot capture returned an empty image. Please try again.");
+  }
   const physicalViewportWidth = firstImg.width;
+  const physicalViewportHeight = firstImg.height;
   const effectiveDpr = zoomedViewportWidth > 0
     ? physicalViewportWidth / zoomedViewportWidth
     : 1;
 
   const fullCanvasWidth = physicalViewportWidth;
-  const canvasHeight = Math.round(totalHeight * effectiveDpr);
+  // Guarantee a non-zero canvas height even if totalHeight reads as 0.
+  const canvasHeight = Math.max(
+    physicalViewportHeight,
+    Math.round((totalHeight || viewportHeight) * effectiveDpr)
+  );
   const fullCanvas = new OffscreenCanvas(fullCanvasWidth, canvasHeight);
   const fullCtx = fullCanvas.getContext("2d");
 
   // 7. Stitch using actual scroll positions to avoid bottom-frame overlap
   for (let i = 0; i < captures.length; i++) {
     const img = i === 0 ? firstImg : await loadImage(captures[i]);
+    if (!img.width || !img.height) continue;
     const drawY = Math.round(scrollPositions[i] * effectiveDpr);
     const remainingHeight = canvasHeight - drawY;
     if (remainingHeight <= 0) continue;
@@ -425,23 +434,30 @@ async function captureFullPage(tabId) {
     );
   }
 
-  // 8. Crop to content area (remove any remaining side margins)
+  // 8. Crop to content area (remove any remaining side margins).
+  // Clamp every dimension to keep the OffscreenCanvas size strictly > 0.
   const cropX = Math.round((zoomedContentLeft || 0) * effectiveDpr);
   const cropW = Math.round((zoomedContentWidth || zoomedViewportWidth) * effectiveDpr);
   const padding = Math.round(16 * effectiveDpr);
-  const finalX = Math.max(0, cropX - padding);
-  const finalW = Math.min(fullCanvasWidth - finalX, cropW + padding * 2);
+  const finalX = Math.max(0, Math.min(fullCanvasWidth - 1, cropX - padding));
+  const desiredW = (cropW > 0 ? cropW : fullCanvasWidth) + padding * 2;
+  const finalW = Math.max(1, Math.min(fullCanvasWidth - finalX, desiredW));
 
-  const croppedCanvas = new OffscreenCanvas(finalW, canvasHeight);
-  const croppedCtx = croppedCanvas.getContext("2d");
-  croppedCtx.drawImage(
-    fullCanvas,
-    finalX, 0, finalW, canvasHeight,
-    0, 0, finalW, canvasHeight
-  );
+  let outputCanvas = fullCanvas;
+  // Skip cropping if it would not actually change anything
+  if (finalX > 0 || finalW < fullCanvasWidth) {
+    const croppedCanvas = new OffscreenCanvas(finalW, canvasHeight);
+    const croppedCtx = croppedCanvas.getContext("2d");
+    croppedCtx.drawImage(
+      fullCanvas,
+      finalX, 0, finalW, canvasHeight,
+      0, 0, finalW, canvasHeight
+    );
+    outputCanvas = croppedCanvas;
+  }
 
   // 9. Export as PNG blob -> Uint8Array
-  const blob = await croppedCanvas.convertToBlob({ type: "image/png" });
+  const blob = await outputCanvas.convertToBlob({ type: "image/png" });
   const arrayBuffer = await blob.arrayBuffer();
   return new Uint8Array(arrayBuffer);
 }
