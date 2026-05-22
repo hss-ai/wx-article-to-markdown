@@ -603,5 +603,45 @@
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true; // async response
     }
+
+    if (msg.action === "getPageDimensions") {
+      sendResponse({
+        totalHeight: Math.max(
+          document.documentElement.scrollHeight,
+          document.body.scrollHeight
+        ),
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      });
+      return false;
+    }
+
+    if (msg.action === "scrollTo") {
+      window.scrollTo(0, msg.y);
+      // Hide fixed/sticky elements to avoid duplication in captures (except first screen)
+      if (msg.hideFixed) {
+        document.querySelectorAll("*").forEach((el) => {
+          const pos = getComputedStyle(el).position;
+          if (pos === "fixed" || pos === "sticky") {
+            el.dataset.html2mdOrigDisplay = el.style.display;
+            el.style.display = "none";
+          }
+        });
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (msg.action === "restorePage") {
+      // Restore hidden fixed elements and scroll to top
+      document.querySelectorAll("[data-html2md-orig-display]").forEach((el) => {
+        el.style.display = el.dataset.html2mdOrigDisplay || "";
+        delete el.dataset.html2mdOrigDisplay;
+      });
+      window.scrollTo(0, 0);
+      sendResponse({ ok: true });
+      return false;
+    }
   });
 })();

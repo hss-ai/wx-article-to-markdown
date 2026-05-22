@@ -9,6 +9,7 @@ const pageMeta = document.getElementById("pageMeta");
 const convertBtn = document.getElementById("convertBtn");
 const statusEl = document.getElementById("status");
 const optImages = document.getElementById("optImages");
+const optScreenshot = document.getElementById("optScreenshot");
 const convertedBadge = document.getElementById("convertedBadge");
 
 // History UI elements
@@ -129,6 +130,15 @@ convertBtn.addEventListener("click", async () => {
   try {
     const tab = await getCurrentTab();
 
+    // Capture full-page screenshot BEFORE extract (extract scrolls and modifies page)
+    let screenshotData = null;
+    if (optScreenshot.checked) {
+      statusEl.textContent = "Capturing full-page screenshot...";
+      screenshotData = await captureFullPage(tab.id);
+    }
+
+    statusEl.textContent = "Extracting content...";
+
     const response = await new Promise((resolve) => {
       chrome.tabs.sendMessage(tab.id, { action: "extract" }, (result) => {
         if (chrome.runtime.lastError) {
@@ -163,7 +173,7 @@ convertBtn.addEventListener("click", async () => {
     statusEl.textContent = "Packaging...";
 
     const includeImages = optImages.checked;
-    const blob = await createDownloadBlob(finalMd, includeImages ? images : []);
+    const blob = await createDownloadBlob(finalMd, includeImages ? images : [], screenshotData);
 
     const safeName = (title || "article").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
     const url = URL.createObjectURL(blob);
@@ -173,7 +183,8 @@ convertBtn.addEventListener("click", async () => {
       saveAs: true,
     });
 
-    statusEl.textContent = `Done! ${images.length} image(s) extracted.`;
+    const screenshotInfo = screenshotData ? " + screenshot" : "";
+    statusEl.textContent = `Done! ${images.length} image(s)${screenshotInfo} extracted.`;
     statusEl.className = "status ok";
 
     // Save to conversion history
@@ -194,9 +205,14 @@ convertBtn.addEventListener("click", async () => {
 
 // ---- Package as ZIP ----
 
-async function createDownloadBlob(markdown, images) {
+async function createDownloadBlob(markdown, images, screenshotData) {
   const files = [];
   files.push({ path: "article.md", data: new TextEncoder().encode(markdown) });
+
+  // Add screenshot if available
+  if (screenshotData) {
+    files.push({ path: "screenshot.png", data: screenshotData });
+  }
 
   for (const img of images) {
     const binary = dataUrlToUint8Array(img.dataUrl);
@@ -298,6 +314,89 @@ function crc32(data) {
   let crc = 0xffffffff;
   for (let i = 0; i < data.length; i++) crc = crcTable[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+// ---- Full-page Screenshot ----
+
+function sendTabMessage(tabId, message) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, message, (result) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function captureFullPage(tabId) {
+  // 1. Get page dimensions
+  const dims = await sendTabMessage(tabId, { action: "getPageDimensions" });
+  if (!dims) throw new Error("Cannot get page dimensions");
+
+  const { totalHeight, viewportHeight, viewportWidth, devicePixelRatio } = dims;
+  const dpr = devicePixelRatio;
+  const captures = [];
+  const numCaptures = Math.ceil(totalHeight / viewportHeight);
+
+  // 2. Scroll and capture each viewport
+  for (let i = 0; i < numCaptures; i++) {
+    const scrollY = i * viewportHeight;
+    await sendTabMessage(tabId, {
+      action: "scrollTo",
+      y: scrollY,
+      hideFixed: i > 0, // hide fixed elements after first screen
+    });
+
+    await delay(350); // wait for rendering
+
+    const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+    captures.push(dataUrl);
+  }
+
+  // 3. Restore page state
+  await sendTabMessage(tabId, { action: "restorePage" });
+
+  // 4. Stitch captures into a single canvas
+  const canvasWidth = viewportWidth * dpr;
+  const canvasHeight = totalHeight * dpr;
+  const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
+  const ctx = canvas.getContext("2d");
+
+  for (let i = 0; i < captures.length; i++) {
+    const img = await loadImage(captures[i]);
+    const srcHeight = img.height;
+    const drawY = i * viewportHeight * dpr;
+
+    // Last capture may extend beyond page — clip it
+    const remainingHeight = canvasHeight - drawY;
+    const drawHeight = Math.min(srcHeight, remainingHeight);
+
+    ctx.drawImage(
+      img,
+      0, 0, img.width, drawHeight, // source rect
+      0, drawY, img.width, drawHeight  // dest rect
+    );
+  }
+
+  // 5. Export as PNG blob -> Uint8Array
+  const blob = await canvas.convertToBlob({ type: "image/png" });
+  const arrayBuffer = await blob.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
 }
 
 // ---- History Management ----

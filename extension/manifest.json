@@ -3,7 +3,7 @@
   "name": "HTML2MD — Web to Markdown",
   "version": "1.2.1",
   "description": "Convert web pages (WeChat, Zhihu, etc.) to Markdown with images, directly in the browser.",
-  "permissions": ["activeTab", "scripting", "downloads", "storage"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage", "tabs"],
   "action": {
     "default_popup": "popup/index.html",
     "default_icon": {
