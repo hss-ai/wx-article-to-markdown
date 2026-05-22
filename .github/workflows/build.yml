@@ -68,6 +68,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sync version to manifest.json
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cd extension
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
+          echo "Extension version: $VERSION"
+          cat manifest.json | grep version
+
       - name: Package extension as ZIP
         run: |
           cd extension
