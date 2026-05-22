@@ -9,6 +9,14 @@ const pageMeta = document.getElementById("pageMeta");
 const convertBtn = document.getElementById("convertBtn");
 const statusEl = document.getElementById("status");
 const optImages = document.getElementById("optImages");
+const convertedBadge = document.getElementById("convertedBadge");
+
+// History UI elements
+const historyCountEl = document.getElementById("historyCount");
+const historyListEl = document.getElementById("historyList");
+const historySearchEl = document.getElementById("historySearch");
+const clearAllBtn = document.getElementById("clearAllBtn");
+const historyStatsEl = document.getElementById("historyStats");
 
 // ---- Turndown instance ----
 const turndown = new TurndownService({
@@ -88,9 +96,28 @@ async function init() {
   } catch {
     pageMeta.textContent = "";
   }
+  // Check if current page was already converted
+  await checkCurrentPage(tab.url);
+  // Update history badge count
+  await updateHistoryBadge();
 }
 
 init();
+
+// ---- Tab switching ----
+
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
+    btn.classList.add("active");
+    const tabId = "tab-" + btn.dataset.tab;
+    document.getElementById(tabId).classList.add("active");
+    if (btn.dataset.tab === "history") {
+      loadHistory();
+    }
+  });
+});
 
 // ---- Convert ----
 
@@ -148,6 +175,15 @@ convertBtn.addEventListener("click", async () => {
 
     statusEl.textContent = `Done! ${images.length} image(s) extracted.`;
     statusEl.className = "status ok";
+
+    // Save to conversion history
+    await saveHistory({
+      title: title || tab.title || "Untitled",
+      url: tab.url,
+      images: images.length,
+    });
+    convertedBadge.classList.add("show");
+    await updateHistoryBadge();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
     statusEl.className = "status err";
@@ -263,3 +299,132 @@ function crc32(data) {
   for (let i = 0; i < data.length; i++) crc = crcTable[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
+
+// ---- History Management ----
+
+const HISTORY_KEY = "html2md_history";
+const MAX_HISTORY = 200;
+
+async function getHistory() {
+  const data = await chrome.storage.local.get(HISTORY_KEY);
+  return data[HISTORY_KEY] || [];
+}
+
+async function saveHistory(record) {
+  const history = await getHistory();
+  const entry = {
+    id: Date.now(),
+    title: record.title,
+    url: record.url,
+    date: new Date().toLocaleString("zh-CN", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }),
+    images: record.images || 0,
+  };
+  history.unshift(entry);
+  // Limit history size
+  if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
+  await chrome.storage.local.set({ [HISTORY_KEY]: history });
+}
+
+async function deleteHistory(id) {
+  let history = await getHistory();
+  history = history.filter((h) => h.id !== id);
+  await chrome.storage.local.set({ [HISTORY_KEY]: history });
+  await loadHistory();
+  await updateHistoryBadge();
+}
+
+async function clearAllHistory() {
+  await chrome.storage.local.set({ [HISTORY_KEY]: [] });
+  await loadHistory();
+  await updateHistoryBadge();
+}
+
+async function checkCurrentPage(url) {
+  const history = await getHistory();
+  const found = history.find((h) => h.url === url);
+  if (found) {
+    convertedBadge.classList.add("show");
+  }
+}
+
+async function updateHistoryBadge() {
+  const history = await getHistory();
+  const count = history.length;
+  if (count > 0) {
+    historyCountEl.textContent = count;
+    historyCountEl.style.display = "inline-block";
+  } else {
+    historyCountEl.style.display = "none";
+  }
+}
+
+async function loadHistory(filter = "") {
+  let history = await getHistory();
+  if (filter) {
+    const q = filter.toLowerCase();
+    history = history.filter(
+      (h) => h.title.toLowerCase().includes(q) || h.url.toLowerCase().includes(q)
+    );
+  }
+
+  if (history.length === 0) {
+    historyListEl.innerHTML = '<div class="history-empty">' +
+      (filter ? "No matching results." : "No conversion history yet.") + '</div>';
+    historyStatsEl.textContent = "";
+    return;
+  }
+
+  let html = "";
+  for (const item of history) {
+    const escapedTitle = escapeHtml(item.title);
+    const domain = getDomain(item.url);
+    html += '<div class="history-item" data-id="' + item.id + '">' +
+      '<div class="history-item-title" data-url="' + escapeHtml(item.url) + '" title="' + escapedTitle + '">' +
+      escapedTitle + '</div>' +
+      '<div class="history-item-meta">' +
+      '<span class="history-item-info">' + domain + ' | ' + item.date + ' | ' + item.images + ' img</span>' +
+      '<button class="history-item-delete" data-id="' + item.id + '" title="Delete">&times;</button>' +
+      '</div></div>';
+  }
+  historyListEl.innerHTML = html;
+
+  const allHistory = await getHistory();
+  historyStatsEl.textContent = "Total: " + allHistory.length + " article(s)";
+
+  // Event delegation for clicks
+  historyListEl.querySelectorAll(".history-item-title").forEach((el) => {
+    el.addEventListener("click", () => {
+      chrome.tabs.create({ url: el.dataset.url });
+    });
+  });
+  historyListEl.querySelectorAll(".history-item-delete").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteHistory(parseInt(el.dataset.id));
+    });
+  });
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function getDomain(url) {
+  try { return new URL(url).hostname; } catch { return ""; }
+}
+
+// ---- History event listeners ----
+
+historySearchEl.addEventListener("input", () => {
+  loadHistory(historySearchEl.value.trim());
+});
+
+clearAllBtn.addEventListener("click", () => {
+  if (confirm("Clear all conversion history?")) {
+    clearAllHistory();
+  }
+});

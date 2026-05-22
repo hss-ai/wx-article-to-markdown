@@ -14,12 +14,13 @@
       --accent-hover: #1d4ed8;
       --success: #16a34a;
       --error: #dc2626;
+      --warn: #d97706;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      width: 360px;
+      width: 380px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       font-size: 13px;
       color: var(--text);
@@ -31,7 +32,7 @@
       display: flex;
       align-items: baseline;
       gap: 8px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
 
     .header h1 {
@@ -44,6 +45,60 @@
       font-size: 11px;
       color: var(--text3);
     }
+
+    /* Tab bar */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    .tab-btn {
+      flex: 1;
+      border: none;
+      background: var(--bg);
+      color: var(--text2);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 0;
+      cursor: pointer;
+      transition: all 0.15s;
+      position: relative;
+    }
+
+    .tab-btn:not(:last-child) {
+      border-right: 1px solid var(--border);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .tab-btn .badge {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: 8px;
+      padding: 1px 5px;
+      margin-left: 4px;
+      min-width: 16px;
+      text-align: center;
+    }
+
+    .tab-btn.active .badge {
+      background: rgba(255,255,255,0.3);
+    }
+
+    /* Tab content */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
 
     .card {
       background: var(--bg);
@@ -74,6 +129,16 @@
       color: var(--text3);
       margin-top: 4px;
     }
+
+    .converted-badge {
+      display: none;
+      font-size: 11px;
+      color: var(--success);
+      font-weight: 600;
+      margin-top: 6px;
+    }
+
+    .converted-badge.show { display: block; }
 
     .btn-primary {
       width: 100%;
@@ -118,6 +183,114 @@
       font-size: 12px;
       color: var(--text2);
     }
+
+    /* History panel */
+    .history-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .history-search {
+      flex: 1;
+      height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 12px;
+      outline: none;
+      transition: border 0.15s;
+    }
+
+    .history-search:focus { border-color: var(--accent); }
+
+    .btn-clear {
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--error);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+
+    .btn-clear:hover { background: #fef2f2; border-color: var(--error); }
+
+    .history-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .history-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      position: relative;
+      transition: border-color 0.15s;
+    }
+
+    .history-item:hover { border-color: var(--accent); }
+
+    .history-item-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.4;
+      cursor: pointer;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .history-item-title:hover { color: var(--accent); }
+
+    .history-item-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+    }
+
+    .history-item-info {
+      font-size: 10px;
+      color: var(--text3);
+    }
+
+    .history-item-delete {
+      border: none;
+      background: none;
+      color: var(--text3);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 3px;
+      line-height: 1;
+      transition: all 0.15s;
+    }
+
+    .history-item-delete:hover { color: var(--error); background: #fef2f2; }
+
+    .history-empty {
+      text-align: center;
+      padding: 30px 0;
+      color: var(--text3);
+      font-size: 12px;
+    }
+
+    .history-stats {
+      text-align: center;
+      font-size: 11px;
+      color: var(--text3);
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -126,19 +299,40 @@
     <span>Web → Markdown</span>
   </div>
 
-  <div class="card" id="pageInfo">
-    <div class="label">Current Page</div>
-    <div class="page-title" id="pageTitle">Loading...</div>
-    <div class="page-meta" id="pageMeta"></div>
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="convert">Convert</button>
+    <button class="tab-btn" data-tab="history">History <span class="badge" id="historyCount" style="display:none">0</span></button>
   </div>
 
-  <div class="toggle-row">
-    <input type="checkbox" id="optImages" checked>
-    <span>Include images</span>
+  <!-- Convert Tab -->
+  <div class="tab-content active" id="tab-convert">
+    <div class="card" id="pageInfo">
+      <div class="label">Current Page</div>
+      <div class="page-title" id="pageTitle">Loading...</div>
+      <div class="page-meta" id="pageMeta"></div>
+      <div class="converted-badge" id="convertedBadge">&#10003; Already converted</div>
+    </div>
+
+    <div class="toggle-row">
+      <input type="checkbox" id="optImages" checked>
+      <span>Include images</span>
+    </div>
+
+    <button class="btn-primary" id="convertBtn">Convert & Download</button>
+    <div class="status" id="status"></div>
   </div>
 
-  <button class="btn-primary" id="convertBtn">Convert & Download</button>
-  <div class="status" id="status"></div>
+  <!-- History Tab -->
+  <div class="tab-content" id="tab-history">
+    <div class="history-toolbar">
+      <input type="text" class="history-search" id="historySearch" placeholder="Search history...">
+      <button class="btn-clear" id="clearAllBtn">Clear All</button>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="history-empty">No conversion history yet.</div>
+    </div>
+    <div class="history-stats" id="historyStats"></div>
+  </div>
 
   <script src="lib/turndown.js"></script>
   <script src="popup.js"></script>
