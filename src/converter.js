@@ -191,6 +191,41 @@ function convertFile(htmlPath, options = {}) {
   // Process images
   const imgCount = processImages($, contentEl, assetsDir, download);
 
+  // Convert section-based tables (WeChat style) to <table>
+  contentEl.find("section").each(function () {
+    const el = $(this);
+    const style = (el.attr("style") || "").replace(/\s/g, "");
+    if (!style.includes("display:flex") && !style.includes("display:grid")) return;
+
+    const children = el.children("section, p").toArray();
+    if (children.length < 2) return;
+
+    let colCount = 0;
+    let isGrid = true;
+
+    for (let i = 0; i < children.length; i++) {
+      const subChildren = $(children[i]).children("section, p, span").toArray();
+      if (subChildren.length === 0) { isGrid = false; break; }
+      if (i === 0) colCount = subChildren.length;
+      else if (subChildren.length !== colCount) { isGrid = false; break; }
+    }
+
+    if (!isGrid || colCount < 2 || children.length < 2) return;
+
+    let tableHtml = "<table><tbody>";
+    for (let r = 0; r < children.length; r++) {
+      tableHtml += "<tr>";
+      const cells = $(children[r]).children("section, p, span").toArray();
+      for (let c = 0; c < cells.length; c++) {
+        const tag = r === 0 ? "th" : "td";
+        tableHtml += `<${tag}>${$(cells[c]).html().trim()}</${tag}>`;
+      }
+      tableHtml += "</tr>";
+    }
+    tableHtml += "</tbody></table>";
+    el.replaceWith(tableHtml);
+  });
+
   // Strip all attributes except essential ones
   contentEl.find("*").each(function () {
     const el = $(this);

@@ -145,6 +145,98 @@
     return m[1].replace("jpeg", "jpg").split("+")[0];
   }
 
+  // ---------------------------------------------------------------------------
+  // WeChat section-based table detection & conversion
+  // ---------------------------------------------------------------------------
+
+  function convertSectionTables(root) {
+    // WeChat uses <section> with flex/grid CSS instead of <table>.
+    // Detect grid patterns: parent section with multiple child sections
+    // where each child has a consistent number of sub-children (columns).
+    const allSections = root.querySelectorAll("section");
+
+    for (const section of allSections) {
+      const style = (section.getAttribute("style") || "").replace(/\s/g, "");
+      // Detect table-like containers: display:flex or display:grid with enough children
+      const isFlexOrGrid =
+        style.includes("display:flex") || style.includes("display:grid");
+      if (!isFlexOrGrid) continue;
+
+      const children = Array.from(section.children).filter(
+        (c) => c.tagName === "SECTION" || c.tagName === "P"
+      );
+      if (children.length < 2) continue;
+
+      // Check if children form a consistent grid (rows with equal column count)
+      let colCount = 0;
+      let isGrid = true;
+
+      for (let i = 0; i < children.length; i++) {
+        const subChildren = Array.from(children[i].children).filter(
+          (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
+        );
+
+        if (subChildren.length === 0) {
+          // This child has text directly — it's a single-column row
+          // or this section is a cell, not a row
+          isGrid = false;
+          break;
+        }
+
+        if (i === 0) {
+          colCount = subChildren.length;
+        } else if (subChildren.length !== colCount) {
+          isGrid = false;
+          break;
+        }
+      }
+
+      if (!isGrid || colCount < 2 || children.length < 2) continue;
+
+      // Build a <table> element
+      const table = document.createElement("table");
+      const tbody = document.createElement("tbody");
+
+      for (let r = 0; r < children.length; r++) {
+        const tr = document.createElement("tr");
+        const cells = Array.from(children[r].children).filter(
+          (c) => c.tagName === "SECTION" || c.tagName === "P" || c.tagName === "SPAN"
+        );
+
+        for (let c = 0; c < cells.length; c++) {
+          const tag = r === 0 ? "th" : "td";
+          const cell = document.createElement(tag);
+          cell.innerHTML = cells[c].innerHTML.trim();
+          tr.appendChild(cell);
+        }
+        tbody.appendChild(tr);
+      }
+
+      table.appendChild(tbody);
+      section.replaceWith(table);
+    }
+
+    // Also handle simpler section patterns: alternating label/value pairs
+    // These are common in WeChat info boxes
+    const infoSections = root.querySelectorAll("section");
+    for (const section of infoSections) {
+      const style = (section.getAttribute("style") || "").replace(/\s/g, "");
+      if (!style.includes("display:flex")) continue;
+
+      const directChildren = Array.from(section.children).filter(
+        (c) => c.tagName === "SECTION"
+      );
+      if (directChildren.length !== 2) continue;
+
+      // Check if this looks like label: value pattern
+      const text1 = directChildren[0].textContent.trim();
+      const text2 = directChildren[1].textContent.trim();
+      if (text1 && text2 && text1.length < 30 && text2.length < 100) {
+        // Skip — these are usually just layout sections, not tables
+      }
+    }
+  }
+
   function blobToDataUrl(blob) {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -185,6 +277,9 @@
 
     // Remove noise
     clone.querySelectorAll("style, script, noscript, iframe, svg").forEach((el) => el.remove());
+
+    // Convert section-based tables to <table> before further processing
+    convertSectionTables(clone);
 
     // 4. Extract images from ORIGINAL elements, update clone references
     const images = [];
