@@ -335,22 +335,40 @@ function delay(ms) {
 }
 
 async function captureFullPage(tabId) {
-  // 1. Get page dimensions
-  const dims = await sendTabMessage(tabId, { action: "getPageDimensions" });
-  if (!dims) throw new Error("Cannot get page dimensions");
+  // 1. Get initial page dimensions to calculate optimal zoom
+  const initDims = await sendTabMessage(tabId, { action: "getPageDimensions" });
+  if (!initDims) throw new Error("Cannot get page dimensions");
 
-  const { totalHeight, viewportHeight, viewportWidth, devicePixelRatio, contentLeft, contentWidth } = dims;
+  const { viewportWidth, contentWidth, devicePixelRatio } = initDims;
   const dpr = devicePixelRatio;
+
+  // 2. Zoom page so content fills viewport width (max 3x to limit file size)
+  const originalZoom = await new Promise((resolve) =>
+    chrome.tabs.getZoom(tabId, (z) => resolve(z))
+  );
+  const idealZoom = contentWidth > 0 ? viewportWidth / contentWidth : 1;
+  const zoomFactor = Math.min(idealZoom, 3) * originalZoom;
+  await new Promise((resolve) =>
+    chrome.tabs.setZoom(tabId, zoomFactor, () => resolve())
+  );
+  await delay(500); // wait for reflow after zoom
+
+  // 3. Re-measure dimensions after zoom (layout has changed)
+  const dims = await sendTabMessage(tabId, { action: "getPageDimensions" });
+  if (!dims) throw new Error("Cannot get page dimensions after zoom");
+
+  const { totalHeight, viewportHeight, contentLeft: zoomedContentLeft, contentWidth: zoomedContentWidth } = dims;
+  const zoomedViewportWidth = dims.viewportWidth;
   const captures = [];
   const numCaptures = Math.ceil(totalHeight / viewportHeight);
 
-  // 2. Scroll and capture each viewport
+  // 4. Scroll and capture each viewport
   for (let i = 0; i < numCaptures; i++) {
     const scrollY = i * viewportHeight;
     await sendTabMessage(tabId, {
       action: "scrollTo",
       y: scrollY,
-      hideFixed: i > 0, // hide fixed elements after first screen
+      hideFixed: i > 0,
     });
 
     await delay(350); // wait for rendering
@@ -359,11 +377,14 @@ async function captureFullPage(tabId) {
     captures.push(dataUrl);
   }
 
-  // 3. Restore page state
+  // 5. Restore page: unhide fixed elements, restore zoom
   await sendTabMessage(tabId, { action: "restorePage" });
+  await new Promise((resolve) =>
+    chrome.tabs.setZoom(tabId, originalZoom, () => resolve())
+  );
 
-  // 4. Stitch captures into a single full-width canvas
-  const fullCanvasWidth = viewportWidth * dpr;
+  // 6. Stitch captures into a single full-width canvas
+  const fullCanvasWidth = zoomedViewportWidth * dpr;
   const canvasHeight = totalHeight * dpr;
   const fullCanvas = new OffscreenCanvas(fullCanvasWidth, canvasHeight);
   const fullCtx = fullCanvas.getContext("2d");
@@ -373,21 +394,19 @@ async function captureFullPage(tabId) {
     const srcHeight = img.height;
     const drawY = i * viewportHeight * dpr;
 
-    // Last capture may extend beyond page — clip it
     const remainingHeight = canvasHeight - drawY;
     const drawHeight = Math.min(srcHeight, remainingHeight);
 
     fullCtx.drawImage(
       img,
-      0, 0, img.width, drawHeight, // source rect
-      0, drawY, img.width, drawHeight  // dest rect
+      0, 0, img.width, drawHeight,
+      0, drawY, img.width, drawHeight
     );
   }
 
-  // 5. Crop to content area (remove side margins)
-  const cropX = Math.round((contentLeft || 0) * dpr);
-  const cropW = Math.round((contentWidth || viewportWidth) * dpr);
-  // Add a small padding (16px) on each side for visual comfort
+  // 7. Crop to content area (remove any remaining side margins)
+  const cropX = Math.round((zoomedContentLeft || 0) * dpr);
+  const cropW = Math.round((zoomedContentWidth || zoomedViewportWidth) * dpr);
   const padding = Math.round(16 * dpr);
   const finalX = Math.max(0, cropX - padding);
   const finalW = Math.min(fullCanvasWidth - finalX, cropW + padding * 2);
@@ -396,11 +415,11 @@ async function captureFullPage(tabId) {
   const croppedCtx = croppedCanvas.getContext("2d");
   croppedCtx.drawImage(
     fullCanvas,
-    finalX, 0, finalW, canvasHeight, // source rect from full canvas
-    0, 0, finalW, canvasHeight        // dest rect in cropped canvas
+    finalX, 0, finalW, canvasHeight,
+    0, 0, finalW, canvasHeight
   );
 
-  // 6. Export as PNG blob -> Uint8Array
+  // 8. Export as PNG blob -> Uint8Array
   const blob = await croppedCanvas.convertToBlob({ type: "image/png" });
   const arrayBuffer = await blob.arrayBuffer();
   return new Uint8Array(arrayBuffer);
