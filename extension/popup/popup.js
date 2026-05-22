@@ -17,6 +17,62 @@ const turndown = new TurndownService({
   codeBlockStyle: "fenced",
 });
 
+// --- GFM Table Rule ---
+turndown.addRule("table", {
+  filter: ["table"],
+  replacement: function (content, node) {
+    const rows = [];
+    const trEls = node.querySelectorAll("tr");
+    if (!trEls || trEls.length === 0) return content;
+
+    for (const tr of trEls) {
+      const cells = [];
+      for (const cell of tr.children) {
+        const tag = cell.tagName.toUpperCase();
+        if (tag === "TD" || tag === "TH") {
+          const text = (cell.textContent || "").trim().replace(/\|/g, "\\|").replace(/\n/g, " ");
+          cells.push(text);
+        }
+      }
+      if (cells.length > 0) rows.push(cells);
+    }
+
+    if (rows.length === 0) return content;
+
+    // Normalize column count
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const normalized = rows.map((r) => {
+      while (r.length < colCount) r.push("");
+      return r;
+    });
+
+    // Build markdown table
+    const header = "| " + normalized[0].join(" | ") + " |";
+    const separator = "| " + normalized[0].map(() => "---").join(" | ") + " |";
+    const body = normalized
+      .slice(1)
+      .map((r) => "| " + r.join(" | ") + " |")
+      .join("\n");
+
+    return "\n\n" + header + "\n" + separator + "\n" + body + "\n\n";
+  },
+});
+
+// Keep td/th from being processed individually
+turndown.addRule("tableCell", {
+  filter: ["td", "th"],
+  replacement: function (content) {
+    return content;
+  },
+});
+
+turndown.addRule("tableRow", {
+  filter: ["tr", "thead", "tbody", "tfoot"],
+  replacement: function (content) {
+    return content;
+  },
+});
+
 // ---- Get current tab info ----
 
 async function getCurrentTab() {

@@ -19,6 +19,92 @@ const turndown = new TurndownService({
   codeBlockStyle: "fenced",
 });
 
+// --- GFM Table Rule ---
+function collectTrNodes(node) {
+  const result = [];
+  function walk(n) {
+    if (!n || !n.childNodes) return;
+    for (let i = 0; i < n.childNodes.length; i++) {
+      const child = n.childNodes[i];
+      const name = (child.nodeName || "").toUpperCase();
+      if (name === "TR") result.push(child);
+      else if (name === "THEAD" || name === "TBODY" || name === "TFOOT") walk(child);
+    }
+  }
+  walk(node);
+  return result;
+}
+
+function getNodeText(node) {
+  if (!node) return "";
+  if (node.nodeType === 3) return node.nodeValue || node.textContent || "";
+  let text = "";
+  if (node.childNodes) {
+    for (let i = 0; i < node.childNodes.length; i++) {
+      text += getNodeText(node.childNodes[i]);
+    }
+  }
+  return text;
+}
+
+turndown.addRule("table", {
+  filter: ["table"],
+  replacement: function (content, node) {
+    const trEls = collectTrNodes(node);
+    if (trEls.length === 0) return content;
+
+    const rows = [];
+    for (const tr of trEls) {
+      const cells = [];
+      if (tr.childNodes) {
+        for (let i = 0; i < tr.childNodes.length; i++) {
+          const cell = tr.childNodes[i];
+          const tag = (cell.nodeName || "").toUpperCase();
+          if (tag === "TD" || tag === "TH") {
+            const text = getNodeText(cell).trim().replace(/\|/g, "\\|").replace(/\n/g, " ");
+            cells.push(text);
+          }
+        }
+      }
+      if (cells.length > 0) rows.push(cells);
+    }
+
+    if (rows.length === 0) return content;
+
+    // Normalize column count
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const normalized = rows.map((r) => {
+      while (r.length < colCount) r.push("");
+      return r;
+    });
+
+    // Build markdown table
+    const header = "| " + normalized[0].join(" | ") + " |";
+    const separator = "| " + normalized[0].map(() => "---").join(" | ") + " |";
+    const body = normalized
+      .slice(1)
+      .map((r) => "| " + r.join(" | ") + " |")
+      .join("\n");
+
+    return "\n\n" + header + "\n" + separator + "\n" + body + "\n\n";
+  },
+});
+
+// Keep td/th from being processed individually
+turndown.addRule("tableCell", {
+  filter: ["td", "th"],
+  replacement: function (content) {
+    return content;
+  },
+});
+
+turndown.addRule("tableRow", {
+  filter: ["tr", "thead", "tbody", "tfoot"],
+  replacement: function (content) {
+    return content;
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Site selectors
 // ---------------------------------------------------------------------------
