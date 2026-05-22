@@ -65,11 +65,12 @@ python html2md.py article.html -o ./output/ --no-download
 
 在浏览器中直接转换当前网页，无需保存 HTML 文件：
 
-1. 打开 `chrome://extensions/`（或 `edge://extensions/`）
-2. 开启「开发者模式」
-3. 点击「加载已解压的扩展程序」，选择本项目的 `extension/` 目录
-4. 打开任意文章页面，点击工具栏的 HTML2MD 图标
-5. 点击 **Convert & Download**，自动下载 `article.zip`（含 Markdown + 图片）
+1. 从 [Releases](https://github.com/hss-ai/wx-article-to-markdown/releases) 下载 `html2md-extension-x.x.x.zip`
+2. 解压到任意目录
+3. 打开 `chrome://extensions/`（或 `edge://extensions/`），开启「开发者模式」
+4. 点击「加载已解压的扩展程序」，选择解压后的目录
+5. 打开任意文章页面，点击工具栏的 HTML2MD 图标
+6. 点击 **Convert & Download**，自动下载 `article.zip`（含 Markdown + 图片）
 
 插件会自动识别微信公众号、知乎等站点，提取正文、标题、作者，打包为 ZIP 下载。
 
