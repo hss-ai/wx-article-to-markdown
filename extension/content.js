@@ -628,10 +628,10 @@
     }
 
     if (msg.action === "scrollTo") {
-      window.scrollTo(0, msg.y);
       // Hide fixed/sticky elements to avoid duplication in captures (except first screen)
       if (msg.hideFixed) {
         document.querySelectorAll("*").forEach((el) => {
+          if (el.dataset.html2mdOrigDisplay !== undefined) return;
           const pos = getComputedStyle(el).position;
           if (pos === "fixed" || pos === "sticky") {
             el.dataset.html2mdOrigDisplay = el.style.display;
@@ -639,7 +639,11 @@
           }
         });
       }
-      sendResponse({ ok: true });
+      window.scrollTo(0, msg.y);
+      // Report the actual scroll position — the browser clamps it to
+      // [0, scrollHeight - innerHeight], so the requested y may differ.
+      const actualY = window.pageYOffset || document.documentElement.scrollTop || 0;
+      sendResponse({ ok: true, actualY: actualY });
       return false;
     }
 
