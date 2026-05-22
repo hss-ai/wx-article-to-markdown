@@ -177,6 +177,73 @@
       detected = tryConvertFlatTextCells(section, childSections);
       if (detected) continue;
     }
+
+    // --- Pattern 4: Feishu/Lark nested <th>/<td> table ---
+    convertNestedThTdTables(originalRoot);
+  }
+
+  function convertNestedThTdTables(root) {
+    const allThs = root.querySelectorAll("th");
+    if (allThs.length === 0) return;
+
+    for (const th of allThs) {
+      if (th.closest("table")) continue;
+      const nestedThs = th.querySelectorAll("th");
+      if (nestedThs.length === 0) continue;
+
+      // Collect header texts from nested <th> chain
+      const headerTexts = [];
+      let cur = th;
+      while (cur && cur.tagName === "TH") {
+        const span = cur.querySelector("span[leaf], span");
+        const txt = span ? span.textContent.trim() : "";
+        if (txt) headerTexts.push(txt);
+        const next = cur.querySelector("th");
+        cur = (next && next !== cur) ? next : null;
+      }
+      if (headerTexts.length < 2) continue;
+
+      // Find <tbody> with rows
+      const tbody = th.querySelector("tbody");
+      if (!tbody) continue;
+
+      const rows = [];
+      for (const tr of tbody.querySelectorAll("tr")) {
+        const cells = [];
+        for (const td of tr.querySelectorAll("td")) {
+          const span = td.querySelector("span[leaf], span");
+          cells.push(span ? span.textContent.trim() : "");
+        }
+        if (cells.length > 0) rows.push(cells);
+      }
+      if (rows.length === 0) continue;
+
+      // Build <table>
+      const table = document.createElement("table");
+      const newTbody = document.createElement("tbody");
+
+      const htr = document.createElement("tr");
+      for (const h of headerTexts) {
+        const th2 = document.createElement("th");
+        th2.textContent = h;
+        htr.appendChild(th2);
+      }
+      newTbody.appendChild(htr);
+
+      for (const row of rows) {
+        const tr2 = document.createElement("tr");
+        for (const cell of row) {
+          const td2 = document.createElement("td");
+          td2.textContent = cell;
+          tr2.appendChild(td2);
+        }
+        newTbody.appendChild(tr2);
+      }
+
+      table.appendChild(newTbody);
+      th.replaceWith(table);
+      return;
+    }
   }
 
   function tryConvertRowBasedGrid(section, children) {
