@@ -339,7 +339,7 @@ async function captureFullPage(tabId) {
   const dims = await sendTabMessage(tabId, { action: "getPageDimensions" });
   if (!dims) throw new Error("Cannot get page dimensions");
 
-  const { totalHeight, viewportHeight, viewportWidth, devicePixelRatio } = dims;
+  const { totalHeight, viewportHeight, viewportWidth, devicePixelRatio, contentLeft, contentWidth } = dims;
   const dpr = devicePixelRatio;
   const captures = [];
   const numCaptures = Math.ceil(totalHeight / viewportHeight);
@@ -362,11 +362,11 @@ async function captureFullPage(tabId) {
   // 3. Restore page state
   await sendTabMessage(tabId, { action: "restorePage" });
 
-  // 4. Stitch captures into a single canvas
-  const canvasWidth = viewportWidth * dpr;
+  // 4. Stitch captures into a single full-width canvas
+  const fullCanvasWidth = viewportWidth * dpr;
   const canvasHeight = totalHeight * dpr;
-  const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
-  const ctx = canvas.getContext("2d");
+  const fullCanvas = new OffscreenCanvas(fullCanvasWidth, canvasHeight);
+  const fullCtx = fullCanvas.getContext("2d");
 
   for (let i = 0; i < captures.length; i++) {
     const img = await loadImage(captures[i]);
@@ -377,15 +377,31 @@ async function captureFullPage(tabId) {
     const remainingHeight = canvasHeight - drawY;
     const drawHeight = Math.min(srcHeight, remainingHeight);
 
-    ctx.drawImage(
+    fullCtx.drawImage(
       img,
       0, 0, img.width, drawHeight, // source rect
       0, drawY, img.width, drawHeight  // dest rect
     );
   }
 
-  // 5. Export as PNG blob -> Uint8Array
-  const blob = await canvas.convertToBlob({ type: "image/png" });
+  // 5. Crop to content area (remove side margins)
+  const cropX = Math.round((contentLeft || 0) * dpr);
+  const cropW = Math.round((contentWidth || viewportWidth) * dpr);
+  // Add a small padding (16px) on each side for visual comfort
+  const padding = Math.round(16 * dpr);
+  const finalX = Math.max(0, cropX - padding);
+  const finalW = Math.min(fullCanvasWidth - finalX, cropW + padding * 2);
+
+  const croppedCanvas = new OffscreenCanvas(finalW, canvasHeight);
+  const croppedCtx = croppedCanvas.getContext("2d");
+  croppedCtx.drawImage(
+    fullCanvas,
+    finalX, 0, finalW, canvasHeight, // source rect from full canvas
+    0, 0, finalW, canvasHeight        // dest rect in cropped canvas
+  );
+
+  // 6. Export as PNG blob -> Uint8Array
+  const blob = await croppedCanvas.convertToBlob({ type: "image/png" });
   const arrayBuffer = await blob.arrayBuffer();
   return new Uint8Array(arrayBuffer);
 }

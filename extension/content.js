@@ -605,6 +605,14 @@
     }
 
     if (msg.action === "getPageDimensions") {
+      // Find content element to determine crop bounds
+      let contentEl = findBySelectors(CONTENT_SELECTORS);
+      if (!contentEl) contentEl = document.body;
+      const rect = contentEl.getBoundingClientRect();
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+      const contentLeft = rect.left + scrollLeft;
+      const contentWidth = rect.width;
+
       sendResponse({
         totalHeight: Math.max(
           document.documentElement.scrollHeight,
@@ -613,6 +621,8 @@
         viewportHeight: window.innerHeight,
         viewportWidth: window.innerWidth,
         devicePixelRatio: window.devicePixelRatio || 1,
+        contentLeft: contentLeft,
+        contentWidth: contentWidth,
       });
       return false;
     }
