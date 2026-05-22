@@ -139,10 +139,20 @@ convertBtn.addEventListener("click", async () => {
 
     statusEl.textContent = "Extracting content...";
 
+    // Make sure content.js is present (covers tabs opened before the
+    // extension was installed/updated).
+    await ensureContentScript(tab.id);
+
     const response = await new Promise((resolve) => {
       chrome.tabs.sendMessage(tab.id, { action: "extract" }, (result) => {
         if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          resolve({
+            ok: false,
+            error:
+              "Cannot reach the page (" +
+              chrome.runtime.lastError.message +
+              "). Please refresh the tab and try again.",
+          });
         } else {
           resolve(result || { ok: false, error: "No response from content script" });
         }
@@ -330,14 +340,45 @@ function sendTabMessage(tabId, message) {
   });
 }
 
+// Inject content.js on demand if the content script wasn't auto-injected
+// (happens on tabs opened before the extension was installed/updated, or on
+// restricted URLs like chrome://, the Web Store, or file:// without access).
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: false },
+      files: ["content.js"],
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function sendTabMessageWithInject(tabId, message) {
+  let result = await sendTabMessage(tabId, message);
+  if (result != null) return result;
+  // Retry after manual injection
+  const injected = await ensureContentScript(tabId);
+  if (!injected) return null;
+  await delay(150);
+  return await sendTabMessage(tabId, message);
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function captureFullPage(tabId) {
   // 1. Get initial page dimensions to calculate optimal zoom
-  const initDims = await sendTabMessage(tabId, { action: "getPageDimensions" });
-  if (!initDims) throw new Error("Cannot get page dimensions");
+  // Use the injecting variant so this also works on tabs opened before the
+  // extension was installed/updated (where content.js was never auto-injected).
+  const initDims = await sendTabMessageWithInject(tabId, { action: "getPageDimensions" });
+  if (!initDims) {
+    throw new Error(
+      "Cannot reach the page. Please refresh the tab and try again (the page may be a restricted URL such as chrome://, the Web Store, or a PDF viewer where extensions cannot run)."
+    );
+  }
 
   const { viewportWidth, contentWidth } = initDims;
 

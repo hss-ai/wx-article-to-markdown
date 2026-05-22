@@ -1,6 +1,6 @@
 {
   "name": "html2md",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Convert SingleFile saved web pages (WeChat, Zhihu, etc.) to Markdown with images",
   "main": "main.js",
   "scripts": {
