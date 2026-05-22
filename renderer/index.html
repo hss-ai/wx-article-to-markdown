@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTML2MD</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">HTML2MD</div>
+      <div class="subtitle">SingleFile / WeChat / Zhihu → Markdown</div>
+    </header>
+
+    <!-- Input -->
+    <section class="section">
+      <label class="label">Input</label>
+      <div class="input-row">
+        <input type="text" id="inputPath" placeholder="Select HTML file(s) or folder..." readonly>
+        <button class="btn" onclick="pickFiles()">Files</button>
+        <button class="btn" onclick="pickFolder()">Folder</button>
+      </div>
+      <div id="fileCount" class="hint"></div>
+    </section>
+
+    <!-- Output -->
+    <section class="section">
+      <label class="label">Output</label>
+      <div class="input-row">
+        <input type="text" id="outputPath" placeholder="Same as source (default)">
+        <button class="btn" onclick="pickOutput()">Browse</button>
+      </div>
+    </section>
+
+    <!-- Options -->
+    <section class="section">
+      <label class="label">Options</label>
+      <label class="checkbox">
+        <input type="checkbox" id="optDownload" checked>
+        Download remote images
+      </label>
+    </section>
+
+    <!-- Convert -->
+    <button class="btn-convert" id="convertBtn" onclick="startConvert()">Convert</button>
+
+    <!-- Progress -->
+    <section class="section" id="progressSection" style="display:none;">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div id="statusText" class="status"></div>
+    </section>
+
+    <!-- Log -->
+    <section class="section" id="logSection" style="display:none;">
+      <label class="label">Log</label>
+      <div class="log" id="logBox"></div>
+    </section>
+
+    <!-- Actions (appear after conversion) -->
+    <div id="actions" style="display:none;">
+      <button class="btn-outline" onclick="openOutput()">Open Output Folder</button>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

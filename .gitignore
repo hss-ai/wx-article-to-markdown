@@ -1,7 +1,11 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
-*$py.class
+
+# Node / Electron
+node_modules/
+release/
+out/
 
 # C extensions
 *.so
