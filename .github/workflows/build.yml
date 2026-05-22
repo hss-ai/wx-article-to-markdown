@@ -49,6 +49,11 @@ jobs:
         if: matrix.platform == 'linux'
         run: npm run build:linux
 
+      - name: Remove builder debug log
+        run: |
+          find release -name 'builder-debug.yml' -delete 2>/dev/null || del release\builder-debug.yml 2>nul || true
+        shell: bash
+
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +127,7 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.AppImage
             artifacts/**/*.blockmap
-            artifacts/**/*.yml
+            artifacts/**/latest*.yml
             artifacts/**/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
