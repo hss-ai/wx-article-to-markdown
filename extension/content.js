@@ -58,34 +58,84 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Scroll page to trigger lazy loading
+  // ---------------------------------------------------------------------------
+
+  function scrollPageToLoadAll() {
+    return new Promise((resolve) => {
+      let scrolled = 0;
+      const step = 800;
+      const maxScroll = document.documentElement.scrollHeight;
+      const interval = setInterval(() => {
+        scrolled += step;
+        window.scrollTo(0, scrolled);
+        if (scrolled >= maxScroll) {
+          clearInterval(interval);
+          window.scrollTo(0, 0);
+          // Wait for images to load after scrolling
+          setTimeout(resolve, 1000);
+        }
+      }, 100);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Image extraction
   // ---------------------------------------------------------------------------
 
-  async function extractImage(img) {
-    const src = img.getAttribute("src") || "";
-    const dataSrc = img.getAttribute("data-src") || "";
+  async function extractImage(imgEl) {
+    // Read from the ORIGINAL element (not a clone), which has real src after lazy load
+    const src = imgEl.getAttribute("src") || "";
+    const dataSrc = imgEl.getAttribute("data-src") || "";
+    const dataOriginal = imgEl.getAttribute("data-original") || "";
+    const lazySrc = imgEl.getAttribute("data-lazy-src") || "";
 
-    // Prefer base64
-    if (src.startsWith("data:image/")) {
+    // Prefer base64 from src
+    if (src.startsWith("data:image/") && src.length > 100) {
       return { dataUrl: src, ext: getImageExt(src) };
     }
-    if (dataSrc.startsWith("data:image/")) {
+
+    // Try data-src base64
+    if (dataSrc.startsWith("data:image/") && dataSrc.length > 100) {
       return { dataUrl: dataSrc, ext: getImageExt(dataSrc) };
     }
 
-    // Try URL
-    const url = dataSrc.startsWith("http") ? dataSrc : src.startsWith("http") ? src : "";
-    if (url) {
+    // Try URL — check multiple attributes in priority order
+    const urlCandidates = [dataSrc, dataOriginal, lazySrc, src].filter(
+      (u) => u && u.startsWith("http")
+    );
+
+    for (const url of urlCandidates) {
       try {
         const resp = await fetch(url);
+        if (!resp.ok) continue;
         const blob = await resp.blob();
+        if (!blob.type.startsWith("image/") || blob.size < 200) continue;
         const dataUrl = await blobToDataUrl(blob);
         const ext = blob.type.split("/")[1] || "png";
         return { dataUrl, ext };
       } catch {
-        return null;
+        continue;
       }
     }
+
+    // Try drawing to canvas as last resort (for canvas-rendered images)
+    if (imgEl.naturalWidth && imgEl.naturalHeight && imgEl.complete) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = imgEl.naturalWidth;
+        canvas.height = imgEl.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(imgEl, 0, 0);
+        const dataUrl = canvas.toDataURL("image/png");
+        if (dataUrl && dataUrl.length > 100 && !dataUrl.endsWith("data:,")) {
+          return { dataUrl, ext: "png" };
+        }
+      } catch {
+        // CORS or tainted canvas — skip
+      }
+    }
+
     return null;
   }
 
@@ -108,23 +158,27 @@
   // ---------------------------------------------------------------------------
 
   async function extractPage() {
-    // Title
+    // 1. Scroll page to trigger lazy loading
+    await scrollPageToLoadAll();
+
+    // 2. Metadata
     const titleEl = findBySelectors(TITLE_SELECTORS);
     let title = titleEl ? titleEl.textContent.trim() : getMeta("og:title") || document.title;
 
-    // Author
     const authorEl = findBySelectors(AUTHOR_SELECTORS);
     const author = authorEl
       ? authorEl.textContent.trim()
       : getMeta("og:article:author") || getMeta("author") || "";
 
-    // Date
     const dateEl = findBySelectors(DATE_SELECTORS);
-    const date = dateEl ? dateEl.textContent.trim() : getMeta("article:published_time").slice(0, 10);
+    const date = dateEl ? dateEl.textContent.trim() : (getMeta("article:published_time") || "").slice(0, 10);
 
-    // Content
+    // 3. Content
     let contentEl = findBySelectors(CONTENT_SELECTORS);
     if (!contentEl) contentEl = document.body;
+
+    // Get original images BEFORE cloning (they have real src after scroll)
+    const originalImgs = contentEl.querySelectorAll("img");
 
     // Clone to avoid modifying the page
     const clone = contentEl.cloneNode(true);
@@ -132,22 +186,27 @@
     // Remove noise
     clone.querySelectorAll("style, script, noscript, iframe, svg").forEach((el) => el.remove());
 
-    // Extract images
+    // 4. Extract images from ORIGINAL elements, update clone references
     const images = [];
-    const imgEls = clone.querySelectorAll("img");
-    for (let i = 0; i < imgEls.length; i++) {
-      const img = imgEls[i];
-      const result = await extractImage(imgEls[i]); // use original, not clone
-      if (result) {
+    const cloneImgs = clone.querySelectorAll("img");
+
+    for (let i = 0; i < Math.min(originalImgs.length, cloneImgs.length); i++) {
+      const result = await extractImage(originalImgs[i]);
+      if (result && result.dataUrl && result.dataUrl.length > 100) {
         const filename = `img_${i}.${result.ext}`;
         images.push({ filename, dataUrl: result.dataUrl });
-        img.setAttribute("src", `./assets/${filename}`);
+        cloneImgs[i].setAttribute("src", `./assets/${filename}`);
       } else {
-        img.remove();
+        cloneImgs[i].remove();
       }
     }
 
-    // Strip all attributes except essential
+    // Handle case where clone has more/less imgs than original
+    for (let i = originalImgs.length; i < cloneImgs.length; i++) {
+      cloneImgs[i].remove();
+    }
+
+    // 5. Strip all attributes except essential
     clone.querySelectorAll("*").forEach((el) => {
       const src = el.getAttribute("src");
       const href = el.getAttribute("href");

@@ -108,6 +108,7 @@ async function createDownloadBlob(markdown, images) {
 
   for (const img of images) {
     const binary = dataUrlToUint8Array(img.dataUrl);
+    if (binary.length < 100) continue; // skip invalid/empty images
     files.push({ path: `assets/${img.filename}`, data: binary });
   }
 
@@ -115,13 +116,18 @@ async function createDownloadBlob(markdown, images) {
 }
 
 function dataUrlToUint8Array(dataUrl) {
-  const base64 = dataUrl.split(",")[1];
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  try {
+    const base64 = dataUrl.split(",")[1];
+    if (!base64) return new Uint8Array(0);
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return new Uint8Array(0);
   }
-  return bytes;
 }
 
 // Minimal ZIP creator
