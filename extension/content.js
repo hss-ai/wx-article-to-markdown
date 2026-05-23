@@ -80,10 +80,54 @@
   }
 
   // ---------------------------------------------------------------------------
+  // CSS background image extraction
+  // Borrowed from wechat-article-exporter's Exporter.ts
+  // ---------------------------------------------------------------------------
+
+  function extractBackgroundImages(root) {
+    const bgRegex = /(?:background|background-image)\s*:\s*url\(["']?((?:https?:)?\/\/[^"')]+)["']?\)/gi;
+    const elements = root.querySelectorAll("[style]");
+    let count = 0;
+
+    for (const el of elements) {
+      const style = el.getAttribute("style") || "";
+      let match;
+      while ((match = bgRegex.exec(style)) !== null) {
+        let url = match[1];
+        if (url.startsWith("//")) url = "https:" + url;
+        if (!url.startsWith("http")) continue;
+
+        const img = document.createElement("img");
+        img.setAttribute("src", url);
+        img.setAttribute("alt", "");
+        img.setAttribute("data-bg-extracted", "true");
+        el.appendChild(img);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Code block language detection
+  // ---------------------------------------------------------------------------
+
+  function detectCodeLanguage(el) {
+    const cls = el.getAttribute("class") || "";
+    let m = cls.match(/(?:language|lang|highlight)\s*-\s*(\w+)/);
+    if (m) return m[1];
+    m = cls.match(/(?:hljs|code-block|code_block)\s+(\w+)/);
+    if (m) return m[1];
+    m = cls.match(/brush\s*:\s*(\w+)/);
+    if (m) return m[1];
+    return "";
+  }
+
+  // ---------------------------------------------------------------------------
   // Image extraction
   // ---------------------------------------------------------------------------
 
-  async function extractImage(imgEl) {
+  async function extractImage(imgEl, retryCount = 2) {
     // Read from the ORIGINAL element (not a clone), which has real src after lazy load
     const src = imgEl.getAttribute("src") || "";
     const dataSrc = imgEl.getAttribute("data-src") || "";
@@ -106,16 +150,27 @@
     );
 
     for (const url of urlCandidates) {
-      try {
-        const resp = await fetch(url);
-        if (!resp.ok) continue;
-        const blob = await resp.blob();
-        if (!blob.type.startsWith("image/") || blob.size < 200) continue;
-        const dataUrl = await blobToDataUrl(blob);
-        const ext = blob.type.split("/")[1] || "png";
-        return { dataUrl, ext };
-      } catch {
-        continue;
+      for (let attempt = 0; attempt <= retryCount; attempt++) {
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            if (attempt < retryCount) {
+              await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+              continue;
+            }
+            break;
+          }
+          const blob = await resp.blob();
+          if (!blob.type.startsWith("image/") || blob.size < 200) break;
+          const dataUrl = await blobToDataUrl(blob);
+          const ext = blob.type.split("/")[1] || "png";
+          return { dataUrl, ext };
+        } catch {
+          if (attempt < retryCount) {
+            await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+            continue;
+          }
+        }
       }
     }
 
@@ -505,6 +560,9 @@
     // 3.5 Convert section-based tables on ORIGINAL DOM (needs computed styles)
     convertSectionTables(contentEl);
 
+    // 3.6 Extract CSS background images as <img> elements
+    extractBackgroundImages(contentEl);
+
     // Get original images BEFORE cloning (they have real src after scroll)
     const originalImgs = contentEl.querySelectorAll("img");
 
@@ -534,8 +592,13 @@
       cloneImgs[i].remove();
     }
 
-    // 5. Pre-process code blocks: fix line breaks and remove "Code" labels
+    // 5. Pre-process code blocks: detect language, fix line breaks and remove "Code" labels
     clone.querySelectorAll("pre code").forEach((code) => {
+      // Detect language from class names
+      const lang = detectCodeLanguage(code);
+      if (lang) {
+        code.setAttribute("data-language", lang);
+      }
       // Replace <br> with newline text nodes
       code.querySelectorAll("br").forEach((br) => {
         br.replaceWith("\n");

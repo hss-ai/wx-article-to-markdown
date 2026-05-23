@@ -6,6 +6,8 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const https = require("https");
+const http = require("http");
 const cheerio = require("cheerio");
 const TurndownService = require("turndown");
 
@@ -87,6 +89,26 @@ turndown.addRule("table", {
       .join("\n");
 
     return "\n\n" + header + "\n" + separator + "\n" + body + "\n\n";
+  },
+});
+
+// Strikethrough support
+turndown.addRule("strikethrough", {
+  filter: ["del", "s", "strike"],
+  replacement: function (content) {
+    return "~~" + content + "~~";
+  },
+});
+
+// Task list support
+turndown.addRule("taskListItems", {
+  filter: function (node) {
+    return node.nodeName === "LI" && node.querySelector('input[type="checkbox"]');
+  },
+  replacement: function (content, node) {
+    const checkbox = node.querySelector('input[type="checkbox"]');
+    const checked = checkbox && checkbox.checked;
+    return "- [" + (checked ? "x" : " ") + "] " + content.replace(/^\s+/, "");
   },
 });
 
@@ -182,8 +204,165 @@ function saveBase64Image(dataUri, assetsDir) {
   }
 }
 
+/**
+ * Download a remote image with retry and exponential backoff.
+ * Borrowed from wechat-article-exporter's BaseDownloader pattern.
+ */
+function downloadRemoteImage(url, assetsDir, maxRetries = 3) {
+  return new Promise((resolve) => {
+    const attempt = (retriesLeft) => {
+      const proto = url.startsWith("https") ? https : http;
+      const req = proto.get(
+        url,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            Referer: new URL(url).origin + "/",
+          },
+          timeout: 20000,
+        },
+        (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            // Follow redirects (up to 5)
+            const redirectUrl = new URL(res.headers.location, url).href;
+            if (maxRetries > 5) {
+              res.resume();
+              resolve(null);
+              return;
+            }
+            res.resume();
+            downloadRemoteImage(redirectUrl, assetsDir, maxRetries).then(resolve);
+            return;
+          }
+          if (res.statusCode !== 200) {
+            res.resume();
+            if (retriesLeft > 0) {
+              const delay = Math.pow(2, 3 - retriesLeft) * 1000;
+              setTimeout(() => attempt(retriesLeft - 1), delay);
+            } else {
+              resolve(null);
+            }
+            return;
+          }
+
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => {
+            const buf = Buffer.concat(chunks);
+            if (buf.length < 200) {
+              resolve(null);
+              return;
+            }
+
+            // Detect extension from content-type or URL
+            const ct = (res.headers["content-type"] || "").toLowerCase();
+            let ext = "png";
+            if (ct.includes("jpeg") || ct.includes("jpg")) ext = "jpg";
+            else if (ct.includes("webp")) ext = "webp";
+            else if (ct.includes("gif")) ext = "gif";
+            else if (ct.includes("svg")) ext = "svg";
+            else {
+              const urlExt = url.match(/\.(png|jpg|jpeg|gif|webp|svg)(?:\?|$)/i);
+              if (urlExt) ext = urlExt[1].toLowerCase().replace("jpeg", "jpg");
+            }
+
+            const h = crypto.createHash("md5").update(buf).digest("hex").slice(0, 12);
+            const fname = `img_${h}.${ext}`;
+            const fpath = path.join(assetsDir, fname);
+
+            if (!fs.existsSync(fpath)) {
+              fs.mkdirSync(assetsDir, { recursive: true });
+              fs.writeFileSync(fpath, buf);
+            }
+            resolve(`./assets/${fname}`);
+          });
+          res.on("error", () => {
+            if (retriesLeft > 0) {
+              const delay = Math.pow(2, 3 - retriesLeft) * 1000;
+              setTimeout(() => attempt(retriesLeft - 1), delay);
+            } else {
+              resolve(null);
+            }
+          });
+        }
+      );
+
+      req.on("error", () => {
+        if (retriesLeft > 0) {
+          const delay = Math.pow(2, 3 - retriesLeft) * 1000;
+          setTimeout(() => attempt(retriesLeft - 1), delay);
+        } else {
+          resolve(null);
+        }
+      });
+
+      req.on("timeout", () => {
+        req.destroy();
+        if (retriesLeft > 0) {
+          const delay = Math.pow(2, 3 - retriesLeft) * 1000;
+          setTimeout(() => attempt(retriesLeft - 1), delay);
+        } else {
+          resolve(null);
+        }
+      });
+    };
+
+    attempt(maxRetries);
+  });
+}
+
+/**
+ * Extract CSS background images from inline styles.
+ * Borrowed from wechat-article-exporter's Exporter.ts regex pattern.
+ */
+function extractBackgroundImages($, contentEl, assetsDir) {
+  let count = 0;
+  const bgRegex = /(?:background|background-image)\s*:\s*url\(["']?((?:https?:)?\/\/[^"')]+)["']?\)/gi;
+
+  contentEl.find("[style]").each(function () {
+    const el = $(this);
+    const style = el.attr("style") || "";
+    let match;
+    while ((match = bgRegex.exec(style)) !== null) {
+      let url = match[1];
+      if (url.startsWith("//")) url = "https:" + url;
+      if (!url.startsWith("http")) continue;
+
+      // Create an <img> tag so Turndown can convert it
+      const img = $(`<img src="${url}" alt="">`);
+      el.append(img);
+      count++;
+    }
+  });
+
+  return count;
+}
+
+/**
+ * Detect code block language from class names.
+ * e.g. class="language-python", class="hljs python", class="brush:python"
+ */
+function detectCodeLanguage(el) {
+  const cls = el.attr("class") || "";
+  // language-xxx
+  let m = cls.match(/(?:language|lang|highlight)\s*-\s*(\w+)/);
+  if (m) return m[1];
+  // hljs xxx or code-block xxx
+  m = cls.match(/(?:hljs|code-block|code_block)\s+(\w+)/);
+  if (m) return m[1];
+  // brush:xxx
+  m = cls.match(/brush\s*:\s*(\w+)/);
+  if (m) return m[1];
+  return "";
+}
+
 function processImages($, contentEl, assetsDir, download) {
   let count = 0;
+
+  // First extract CSS background images as <img> tags
+  if (download) {
+    count += extractBackgroundImages($, contentEl, assetsDir);
+  }
 
   contentEl.find("img").each(function () {
     const img = $(this);
@@ -209,8 +388,15 @@ function processImages($, contentEl, assetsDir, download) {
       }
     }
 
-    // Remote URL (note: in Electron, downloads are async; skip for now in sync path)
-    // The main process handles async downloads separately if needed
+    // Remote URL — handled synchronously placeholder; async path used in main process
+    if (src.startsWith("http")) {
+      // Mark for async download; don't remove
+      return;
+    }
+    if (dataSrc && dataSrc.startsWith("http")) {
+      img.attr("src", dataSrc);
+      return;
+    }
 
     // Remove unprocessable base64 to prevent pollution
     if (src.startsWith("data:")) {
@@ -231,9 +417,9 @@ function processImages($, contentEl, assetsDir, download) {
  * @param {object} options
  * @param {string|null} options.outputDir - Output directory (default: same as input)
  * @param {boolean} options.download - Whether to download remote images
- * @returns {{ outputPath: string, title: string, images: number, error: string|null }}
+ * @returns {Promise<{ outputPath: string, title: string, images: number, error: string|null }>}
  */
-function convertFile(htmlPath, options = {}) {
+async function convertFile(htmlPath, options = {}) {
   const { outputDir = null, download = true } = options;
 
   const absPath = path.resolve(htmlPath);
@@ -274,8 +460,46 @@ function convertFile(htmlPath, options = {}) {
   let contentEl = findBySelectors($, CONTENT_SELECTORS);
   if (!contentEl) contentEl = $("body");
 
-  // Process images
-  const imgCount = processImages($, contentEl, assetsDir, download);
+  // Process images (base64 + background image extraction)
+  let imgCount = processImages($, contentEl, assetsDir, download);
+
+  // Download remote images asynchronously with retry
+  if (download) {
+    const remoteImgs = [];
+    contentEl.find("img").each(function () {
+      const img = $(this);
+      const src = img.attr("src") || "";
+      if (src.startsWith("http")) {
+        remoteImgs.push({ el: img, url: src });
+      }
+    });
+
+    // Concurrent download with limit (borrowed from wechat-article-exporter's Promise.race pattern)
+    const concurrency = 5;
+    const active = new Set();
+    for (const item of remoteImgs) {
+      const p = downloadRemoteImage(item.url, assetsDir).then((result) => {
+        if (result) {
+          item.el.attr("src", result);
+          imgCount++;
+        } else {
+          item.el.remove();
+        }
+      });
+      active.add(p);
+      p.finally(() => active.delete(p));
+      if (active.size >= concurrency) {
+        await Promise.race(active);
+      }
+    }
+    if (active.size > 0) await Promise.all(active);
+  } else {
+    // Remove remote images when download disabled
+    contentEl.find("img").each(function () {
+      const src = $(this).attr("src") || "";
+      if (src.startsWith("http")) $(this).remove();
+    });
+  }
 
   // Convert section-based tables (WeChat style) to <table>
   contentEl.find("section").each(function () {
@@ -312,9 +536,14 @@ function convertFile(htmlPath, options = {}) {
     el.replaceWith(tableHtml);
   });
 
-  // Pre-process code blocks: fix line breaks and remove "Code" labels
+  // Pre-process code blocks: fix line breaks, detect language, remove "Code" labels
   contentEl.find("pre code").each(function () {
     const code = $(this);
+    // Detect language from class
+    const lang = detectCodeLanguage(code);
+    if (lang) {
+      code.attr("data-language", lang);
+    }
     // Replace <br> with newline text nodes
     code.find("br").each(function () {
       $(this).replaceWith("\n");
@@ -324,6 +553,19 @@ function convertFile(htmlPath, options = {}) {
       $(this).replaceWith($(this).html());
     });
   });
+
+  // Add fenced code block with language support
+  turndown.addRule("fencedCodeBlock", {
+    filter: function (node) {
+      return node.nodeName === "CODE" && node.parentNode && node.parentNode.nodeName === "PRE";
+    },
+    replacement: function (content, node) {
+      const lang = node.getAttribute("data-language") || "";
+      const langPrefix = lang ? lang : "";
+      return "\n\n```" + langPrefix + "\n" + content.replace(/^\n+/, "").replace(/\n+$/, "") + "\n```\n\n";
+    },
+  });
+
   // Remove "Code" labels near <pre> elements
   contentEl.find("pre").each(function () {
     const pre = $(this);
@@ -358,7 +600,11 @@ function convertFile(htmlPath, options = {}) {
   const mdRaw = turndown.turndown(contentEl.html() || "");
 
   // Clean up
-  let md = mdRaw.replace(/\n{3,}/g, "\n\n").replace(/!\[\]\(\s*\)/g, "").trim();
+  let md = mdRaw
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/!\[\]\(\s*\)/g, "")
+    .replace(/ /g, " ")
+    .trim();
 
   // Assemble
   let parts = [];

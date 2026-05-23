@@ -65,7 +65,7 @@ ipcMain.handle("select-output", async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle("convert", async (event, { files, outputDir, download }) => {
+  ipcMain.handle("convert", async (event, { files, outputDir, download }) => {
   const results = [];
 
   for (let i = 0; i < files.length; i++) {
@@ -77,7 +77,7 @@ ipcMain.handle("convert", async (event, { files, outputDir, download }) => {
       status: "converting",
     });
 
-    const result = convertFile(filePath, { outputDir, download });
+    const result = await convertFile(filePath, { outputDir, download });
     results.push({ input: filePath, ...result });
 
     event.sender.send("convert-progress", {

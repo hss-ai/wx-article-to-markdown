@@ -5,6 +5,7 @@ import glob
 import hashlib
 import os
 import re
+import time
 import urllib.request
 
 from bs4 import BeautifulSoup
@@ -38,7 +39,7 @@ def _save_base64_image(data_uri: str, assets_dir: str) -> str | None:
     return f"./assets/{fname}"
 
 
-def _download_image(url: str, assets_dir: str) -> str | None:
+def _download_image(url: str, assets_dir: str, max_retries: int = 3) -> str | None:
     ext_match = re.search(r"\.(png|jpg|jpeg|gif|webp|svg)(?:\?|$)", url, re.IGNORECASE)
     ext = ext_match.group(1).lower() if ext_match else "png"
     if ext == "jpeg":
@@ -48,21 +49,50 @@ def _download_image(url: str, assets_dir: str) -> str | None:
     fpath = os.path.join(assets_dir, fname)
     if os.path.exists(fpath):
         return f"./assets/{fname}"
-    try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://mp.weixin.qq.com/",
-        })
-        resp = urllib.request.urlopen(req, timeout=20)
-        img_bytes = resp.read()
-        if len(img_bytes) < 200:
-            return None
-        os.makedirs(assets_dir, exist_ok=True)
-        with open(fpath, "wb") as f:
-            f.write(img_bytes)
-        return f"./assets/{fname}"
-    except Exception:
-        return None
+
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://mp.weixin.qq.com/",
+            })
+            resp = urllib.request.urlopen(req, timeout=20)
+            img_bytes = resp.read()
+            if len(img_bytes) < 200:
+                return None
+            os.makedirs(assets_dir, exist_ok=True)
+            with open(fpath, "wb") as f:
+                f.write(img_bytes)
+            return f"./assets/{fname}"
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            continue
+    return None
+
+
+def _extract_background_images(content, assets_dir: str, download: bool = True) -> int:
+    """Extract CSS background images from inline styles as <img> tags."""
+    if not download:
+        return 0
+
+    bg_regex = re.compile(
+        r'(?:background|background-image)\s*:\s*url\(["\']?((?:https?:)?//[^"\']+)["\']?\)',
+        re.IGNORECASE,
+    )
+    count = 0
+    for el in content.find_all(attrs={"style": True}):
+        style = el.get("style", "")
+        for match in bg_regex.finditer(style):
+            url = match.group(1)
+            if url.startswith("//"):
+                url = "https:" + url
+            if not url.startswith("http"):
+                continue
+            img = content.new_tag("img", src=url, alt="")
+            el.append(img)
+            count += 1
+    return count
 
 
 def _process_images(content, assets_dir: str, download: bool = True) -> int:
@@ -179,6 +209,75 @@ def _extract(soup):
 
 
 # ---------------------------------------------------------------------------
+# Code block language detection
+# ---------------------------------------------------------------------------
+
+def _detect_code_language(cls: str) -> str:
+    """Detect language from class names like 'language-python', 'hljs python'."""
+    m = re.search(r"(?:language|lang|highlight)\s*-\s*(\w+)", cls)
+    if m:
+        return m.group(1)
+    m = re.search(r"(?:hljs|code-block|code_block)\s+(\w+)", cls)
+    if m:
+        return m.group(1)
+    m = re.search(r"brush\s*:\s*(\w+)", cls)
+    if m:
+        return m.group(1)
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Section-based table detection (WeChat style)
+# ---------------------------------------------------------------------------
+
+def _convert_section_tables(content) -> None:
+    """Convert flex/grid section layouts to <table> elements."""
+    for section in content.find_all("section"):
+        style = (section.get("style") or "").replace(" ", "")
+        if "display:flex" not in style and "display:grid" not in style:
+            continue
+
+        children = [c for c in section.children
+                    if hasattr(c, "name") and c.name in ("section", "p")]
+        if len(children) < 2:
+            continue
+
+        col_count = 0
+        is_grid = True
+
+        for i, child in enumerate(children):
+            sub = [c for c in child.children
+                   if hasattr(c, "name") and c.name in ("section", "p", "span")]
+            if not sub:
+                is_grid = False
+                break
+            if i == 0:
+                col_count = len(sub)
+            elif len(sub) != col_count:
+                is_grid = False
+                break
+
+        if not is_grid or col_count < 2 or len(children) < 2:
+            continue
+
+        table = BeautifulSoup("<table><tbody></tbody></table>", "html.parser")
+        tbody = table.find("tbody")
+
+        for r, row_el in enumerate(children):
+            tr = table.new_tag("tr")
+            cells = [c for c in row_el.children
+                     if hasattr(c, "name") and c.name in ("section", "p", "span")]
+            for cell_el in cells:
+                tag_name = "th" if r == 0 else "td"
+                cell = table.new_tag(tag_name)
+                cell.append(BeautifulSoup(cell_el.decode_contents(), "html.parser"))
+                tr.append(cell)
+            tbody.append(tr)
+
+        section.replace_with(table)
+
+
+# ---------------------------------------------------------------------------
 # Markdown conversion
 # ---------------------------------------------------------------------------
 
@@ -256,6 +355,22 @@ def convert_file(
 
     img_count = _process_images(content, assets_dir, download=download)
 
+    # Extract CSS background images
+    img_count += _extract_background_images(content, assets_dir, download=download)
+
+    # Convert section-based tables (WeChat style) to <table>
+    _convert_section_tables(content)
+
+    # Detect code block languages before stripping attributes
+    code_langs = []
+    for code in content.find_all("code"):
+        parent = code.parent
+        if parent and parent.name == "pre":
+            cls = code.get("class", [])
+            cls_str = " ".join(cls) if isinstance(cls, list) else str(cls)
+            lang = _detect_code_language(cls_str)
+            code_langs.append(lang)
+
     # Strip all attributes except essential ones
     for tag in content.find_all(True):
         tag.attrs = {k: v for k, v in tag.attrs.items() if k in ("src", "href", "alt")}
@@ -270,12 +385,26 @@ def convert_file(
         convert=[
             "p", "h1", "h2", "h3", "h4", "h5", "h6",
             "img", "ul", "ol", "li",
-            "strong", "em", "b", "i",
+            "strong", "em", "b", "i", "del", "s", "strike",
             "blockquote", "br", "hr",
             "a", "table", "tr", "td", "th",
+            "pre", "code",
             "span", "div", "section",
         ],
     )
+
+    # Inject detected languages into fenced code blocks
+    if code_langs:
+        fence_idx = 0
+        def _inject_lang(match):
+            nonlocal fence_idx
+            lang = code_langs[fence_idx] if fence_idx < len(code_langs) else ""
+            fence_idx += 1
+            if lang:
+                return f"```{lang}"
+            return match.group(0)
+        md_raw = re.sub(r"^```\s*$", _inject_lang, md_raw, flags=re.MULTILINE)
+
     md = _clean_markdown(md_raw)
 
     # Assemble

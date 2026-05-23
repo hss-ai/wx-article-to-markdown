@@ -82,6 +82,37 @@ turndown.addRule("tableRow", {
   },
 });
 
+// Strikethrough support
+turndown.addRule("strikethrough", {
+  filter: ["del", "s", "strike"],
+  replacement: function (content) {
+    return "~~" + content + "~~";
+  },
+});
+
+// Task list support
+turndown.addRule("taskListItems", {
+  filter: function (node) {
+    return node.nodeName === "LI" && node.querySelector('input[type="checkbox"]');
+  },
+  replacement: function (content, node) {
+    const checkbox = node.querySelector('input[type="checkbox"]');
+    const checked = checkbox && checkbox.checked;
+    return "- [" + (checked ? "x" : " ") + "] " + content.replace(/^\s+/, "");
+  },
+});
+
+// Code block with language detection
+turndown.addRule("fencedCodeBlock", {
+  filter: function (node) {
+    return node.nodeName === "CODE" && node.parentNode && node.parentNode.nodeName === "PRE";
+  },
+  replacement: function (content, node) {
+    const lang = node.getAttribute("data-language") || "";
+    return "\n\n```" + lang + "\n" + content.replace(/^\n+/, "").replace(/\n+$/, "") + "\n```\n\n";
+  },
+});
+
 // ---- Get current tab info ----
 
 async function getCurrentTab() {
